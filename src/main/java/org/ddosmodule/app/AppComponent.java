@@ -90,7 +90,17 @@ public class AppComponent {
         //Maps for keeping count of source ips, destination ips and ip protocols
         private Map<Integer, Integer> srcIps = new HashMap<Integer, Integer>(); //Count of Source Ips
         private Map<Integer, Integer> dstIps = new HashMap<Integer, Integer>(); //Count of Destination Ips
+        private Map<Integer, Integer> srcIps_dstVictimIps = new HashMap<Integer, Integer>(); //Count of Server IPs in Network , just initiallized after Attack Detection
         private Map<Byte, Integer> ipProtocols = new HashMap<Byte, Integer>(); //Count of Ip Protocols
+        private Map<Byte, Integer> dstSrvProtocols = new HashMap<Byte, Integer>(); //Count of Ip Protocols
+        /* 
+                              !!! %%%%                          */
+        private Map<Integer,new HashMap<Integer,Map<new HashMap<Integer,Map<Integer,Integer>>>>> dstSrvIp_srcPort = new HashMap<Integer,new HashMap<Integer,Map<new HashMap<Integer,Map<Integer,Integer>>>>>();// Count of Server Ip to be monitored
+        private Map<Integer,HashMap<Integer,Map>> tempL1 = {};
+        // temp. container for revceiving Level2 map
+        private Map<Integer,Integer> tempL2 = {};
+        int mitigationFlag = 0;
+        // flagbbb=
         /*
            Flow feature variables.
          */
@@ -167,8 +177,6 @@ public class AppComponent {
                         if (eth.getEtherType() == Ethernet.TYPE_IPV4) {
                                 //Getting IPv4 packet from ethernet frame
                                 IPv4 ipPacket = (IPv4)eth.getPayload();
-
-
                                 /*
                                 Putting count of source ip, destination ip and
                                 ip protocol in
@@ -187,18 +195,21 @@ public class AppComponent {
                                           increased value .
                                           else put value=1 in map.
                                          */
+                                        // Packet_IN for Victim Srv.IP are to be sergregared in Different Block
+                                        // Yet to decalre mitig_flag var
+
                                         if (srcIps.get(ipPacket.getSourceAddress()) == null) {
                                                 srcIps.put(ipPacket.getSourceAddress(), 1);
                                         } else {
                                                 srcIps.put(ipPacket.getSourceAddress(),
-                                                           srcIps.get(ipPacket.getSourceAddress())+1);
+                                                        srcIps.get(ipPacket.getSourceAddress())+1);
                                         }
                                         if (dstIps.get(ipPacket.getDestinationAddress()) == null) {
                                                 dstIps.put(
                                                         ipPacket.getDestinationAddress(), 1);
                                         } else {
                                                 dstIps.put(ipPacket.getDestinationAddress(),
-                                                           dstIps.get(ipPacket.getDestinationAddress())+1);
+                                                        dstIps.get(ipPacket.getDestinationAddress())+1);
                                         }
                                         if (ipProtocols.get(ipPacket.getProtocol()) == null) {
                                                 ipProtocols.put(
@@ -206,12 +217,52 @@ public class AppComponent {
                                         } else {
                                                 ipProtocols.put(ipPacket.getProtocol(),
                                                                 ipProtocols.get(ipPacket.getProtocol())+1);
+                                        }// @@ Still at Both - ML1 and ML2 server entropy data for these servers will be sent
+                                        // Step: 1) Entropy calc 2) check if Map has Srv.Ip's Key then in Map2 recheck if it has this Src.IP as Key if true then in Map3 check if this has Src.Port as Key the
+                                        if (mitigationFlag) {
+                                                // information to be gathered : {Destination_IP , Src_IP , Src_Port } in recursive Map , Protocol count
+                                                if (srcIps_dstVictimIps.get(ipPacket.getSourceAddress()) == null) {
+                                                        srcIps_dstVictimIps.put(ipPacket.getSourceAddress(), 1);
+                                                } else {
+                                                        srcIps_dstVictimIps.put(ipPacket.getSourceAddress(),
+                                                                srcIps_dstVictimIps.get(ipPacket.getSourceAddress())+1);
+                                                }
+                                          	if (dstSrvProtocols.get(ipPacket.getProtocol()) == null) {
+                                                        dstSrvProtocols.put(
+                                                                ipPacket.getProtocol(), 1);
+                                                } else {
+                                                        dstSrvProtocols.put(ipPacket.getProtocol(),
+                                                                        dstSrvProtocols.get(ipPacket.getProtocol())+1);     
+                                                }
+                                                // ddf
+                                                if (dstSrvIp_srcPort.containsKey(ipPacket.getDestinationAddress()))
+                                                {
+                                                        tempL1 = dstSrvIp_srcPort.get(ipPacket.getDestinationAddress())
+                                                        //
+                                                        if (tempL1.containsKey(ipPacket.getSourceAddress())){
+                                                                tempL2 = tempL1.get(ipPacket.getSourceAddress())// it is a Map with Key as Port
+                                                                if (tempL2.containsKey(ipPacket.getSourcePort())){
+                                                                        continue;
+                                                                }
+                                                                else{
+                                                                        dstSrvIp_srcPort[ipPacket.getDestinationAddress()].[ipPacket.getSourcePort()].put(ipPacket.getSourcePort(),0);
+                                                                        // ?????? !!! verify this
+                                                                }
+                                                        }
+                                                        else{
+                                                                dstSrvIp_srcPort[ipPacket.getDestinationAddress()].put(ipPacket.getSourceAddress(),new HashMap<Integer,Map<Integer,Integer>>);
+                                                        }
+                                                        // http://api.onosproject.org/1.8.9/org/onlab/packet/TCP.html ?????????
+                                                }
+                                
+                                            
+                                          
                                         }
                                         //releasing critical section
                                         semaphore.release();
                                 }
                         }
-                }//end of process()
+                }//end of process() 
         }//end of InPacketProcessor
 
         /*
@@ -418,4 +469,4 @@ public class AppComponent {
                 }//end of run()
         }//end of FlowInfoProcessor
 
-}//end of AppComponent
+}//end of AppComponenthttps://codeshare.io/5z8XdW
