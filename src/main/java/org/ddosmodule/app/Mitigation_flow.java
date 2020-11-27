@@ -160,17 +160,18 @@ public class Mitigation_flow {
 
                 Set<Criterion> criteria = flowEntry.selector().criteria();
 
-                //Setting all parameters same except one that determines traffic
+                //Setting all parameters same(cpy as it is) except one that determines traffic (so in 2nd case we would skip src.Port and later on Add things there)
                 for (Criterion criterion : criteria) {
                     if (criterion.type() != Criterion.Type.ETH_DST &&
                             criterion.type() != Criterion.Type.IPV4_DST) {
                         selectorBuilder.add(criterion);
-                    }
+                    }//TCP_SRC : matchTcpSrc(TpPort tcpPort)
                 }
 
                 //Adding required criterias
                 selectorBuilder.add(Criteria.matchEthDst(macAddress));
                 selectorBuilder.add(Criteria.matchIPDst(Ip4Prefix.valueOf(stringIp + "/32")));
+                // @Kamal we will add the criteria for Source Ports here itself
                 //Building required traffic selector
                 TrafficSelector trafficSelector = selectorBuilder.build();
 
@@ -183,7 +184,7 @@ public class Mitigation_flow {
                  */
                 if (deviceId.equals(flowEntry.deviceId()) &&
                         trafficSelector.equals(flowEntry.selector()) && portCriterion != null) {
-                    //selecting flowEntry with maximum bytes_in
+                    //selecting flowEntry with maximum bytes_in     //Input port Field for portCriterion should not be null
                     if (flowEntry.bytes() > max_bytes) {
                         max_bytes = flowEntry.bytes();
                         portNumber_max_bytes = portCriterion.port();
@@ -192,6 +193,10 @@ public class Mitigation_flow {
                     }
                     log.info("flow rule match found at port: "+portCriterion.port().toString());
                 }
+                // flowEntry.packets()
+                //Returns the number of packets this flow rule has matched.
+                //http://api.onosproject.org/1.8.4/org/onosproject/net/flow/FlowEntry.html
+
 
             }//end of flowEntries
 
