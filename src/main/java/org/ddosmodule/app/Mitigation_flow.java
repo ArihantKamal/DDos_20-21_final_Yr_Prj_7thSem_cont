@@ -59,6 +59,7 @@ public class Mitigation_flow {
     LinkService linkService;
     FlowObjectiveService flowObjectiveService;
     Logger log;
+    String result_IP;
 
     //Priority for flow rule to drop traffic
     private static final int DROP_PRIORITY = 128;
@@ -68,7 +69,7 @@ public class Mitigation_flow {
     //Constructor for Mitigation_flow
     Mitigation_flow(ApplicationId appId, DeviceService deviceService, HostService hostService,
                     FlowRuleService flowRuleService, LinkService linkService,
-                    FlowObjectiveService flowObjectiveService, Logger log) {
+                    FlowObjectiveService flowObjectiveService, Logger log , String result_IP) {
         this.appId = appId;
         this.deviceService = deviceService;
         this.hostService = hostService;
@@ -76,6 +77,7 @@ public class Mitigation_flow {
         this.linkService = linkService;
         this.flowObjectiveService = flowObjectiveService;
         this.log = log;
+        this.result_IP = result_IP;
 
         //calling to start traceback of traffic
         initiateTraceBackToSource();
@@ -87,24 +89,22 @@ public class Mitigation_flow {
      */
     public void initiateTraceBackToSource() {
         //Getting serverIpAddresses
-        String[] stringIps = Servers.getServerIpAddresses();
-        for (String stringIp : stringIps) {
-            //converting string to IpAddress
-            IpAddress ipAddress = IpAddress.valueOf(stringIp);
-            //getting host from IpAddress
-            Set<Host>  hostSet = hostService.getHostsByIp(ipAddress);
-            for (Host host : hostSet) {
-                //Getting immediate device to server(location in term of switch)
-                HostLocation hostLocation = host.location();
-                DeviceId deviceId = hostLocation.deviceId();
-                //getting MacAddress of server
-                MacAddress macAddress = host.mac();
-                //Initializing thread for a server
-                ThreadedTraceBack threadedTraceBack = new ThreadedTraceBack(
-                        deviceId, macAddress, stringIp);
-                //starting thread
-                threadedTraceBack.start();
-            }
+        // String[] stringIps = Servers.getServerIpAddresses();
+        //converting string to IpAddress
+        IpAddress ipAddress = IpAddress.valueOf(result_IP);
+        //getting host from IpAddress
+        Set<Host>  hostSet = hostService.getHostsByIp(ipAddress);
+        for (Host host : hostSet) {
+            //Getting immediate device to server(location in term of switch)
+            HostLocation hostLocation = host.location();
+            DeviceId deviceId = hostLocation.deviceId();
+            //getting MacAddress of server
+            MacAddress macAddress = host.mac();
+            //Initializing thread for a server
+            ThreadedTraceBack threadedTraceBack = new ThreadedTraceBack(
+                    deviceId, macAddress, result_IP);
+            //starting thread
+            threadedTraceBack.start();
         }
     }//end of initiateTraceBackToSource()
 
