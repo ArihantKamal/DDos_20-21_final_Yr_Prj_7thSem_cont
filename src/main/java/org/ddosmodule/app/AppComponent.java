@@ -26,7 +26,6 @@ import org.apache.felix.scr.annotations.ReferenceCardinality;
 import org.onlab.packet.Ethernet;
 import org.onlab.packet.Ip4Prefix;
 import org.onlab.packet.IpAddress;
-// import org.onlab.packet.PacketUtils.*;
 import org.onlab.packet.IPv4;
 import org.onlab.packet.TCP;
 import org.onosproject.core.ApplicationId;
@@ -108,9 +107,10 @@ public class AppComponent {
         private Map<Byte, Integer> ipProtocols = new HashMap<Byte, Integer>(); //Count of Ip Protocols
         private HashMap<Integer, HashMap<Byte,Integer>> ipProtocols_per_Srv = new HashMap<Integer, HashMap<Byte,Integer>>(); //Count of Ip Protocols
         private HashMap<Integer, HashMap<Integer,Integer>> ipSrc_per_Srv = new HashMap<Integer, HashMap<Integer,Integer>>(); //Count of Ip Protocols
+        private HashMap<Integer, HashMap<Integer,Integer>> ipSrc_per_Srv2 = new HashMap<Integer, HashMap<Integer,Integer>>(); // temp DS taken
 
-        private HashMap<Integer, Hashmap<Integer,Integer>> temp3_mapL2 = new HashMap <Integer, Hashmap<Integer,Integer>>();
-
+        //public java.util.HashMap<Integer, Hashmap<Integer,Integer>> temp3_mapL2 = new java.util.HashMap <Integer,Hashmap<Integer,Integer>>();
+        //public java.util.HashMap<Integer, Hashmap<Integer,Integer>> temp5_mapL2 = new java.util.HashMap <Integer,Hashmap<Integer,Integer>>();
 
         private HashMap<Integer, HashMap<Integer,HashMap<Integer,Integer> >> ipSrcPort_per_Srv = new HashMap<Integer,HashMap<Integer,HashMap<Integer,Integer>>>();// Count of Server Ip to be monitored
         // private HashMap<Integer,HashMap<Integer,HashMap>> tempL1 = new HashMap<Integer,Integer>();
@@ -199,7 +199,7 @@ public class AppComponent {
                         if (eth.getEtherType() == Ethernet.TYPE_IPV4) {
                                 //Getting IPv4 packet from ethernet frame
                                 IPv4 ipPacket = (IPv4)eth.getPayload();
-                                TCP tcpPacket = (TCP)eth.getPayload();
+                                //TCP tcpPacket = (TCP)eth.getPayload();
                                 /*
                                 Putting count of source ip, destination ip and
                                 ip protocol in
@@ -283,27 +283,29 @@ public class AppComponent {
 
                                                         // Goal 3 :entropy of ports per IP
                                                         // Level 
-                                                        // HashMap<Integer, Hashmap<Integer,Integer>> temp3_mapL2 = new HashMap <Integer, Hashmap<Integer,Integer>>();
-                                                        temp3_mapL2 = ipSrcPort_per_Srv.get(dst_ip);//returns mapL2
                                                         // for Level 3 we will Reuse temp2_mapL2 which has suitable structure for Port(<int,int>) same as used earlier for IP's entropy calc.
-                                                        if (temp3_mapL2 == null)
+                                                        
+                                                        ipSrc_per_Srv2 =ipSrcPort_per_Srv.get(dst_ip);//returns mapL2
+                                                        if (ipSrc_per_Srv2 == null)
                                                         {
                                                                 // temp3_mapL2 = new  HashMap<int,Hashmap<int,int>>()
                                                                 // first we will generate map for Base level i.e. mapL3 -> then we will insert this into temp3_mapL2 at Level 2 
                                                                 //which will then insert into Top mapLevel 1 i.e. ipSrcPort_per_Srv itself
+                                                                
                                                                 temp2_mapL2.clear();/* clearing this for Reusability as compatible for layer 3rd*/
-                                                                temp2_mapL2.put(tcpPacket.getSourcePort(),1);// ex. key =port 555 ,val 1
-                                                                temp3_mapL2.put(ipPacket.getSourceAddress(),temp2_mapL2);// key = srcIP , val = temp2_map_L2
-                                                                ipSrcPort_per_Srv.put(dst_ip,temp3_mapL2);
+                                                                temp2_mapL2.put(555,1);// ex. key =port 555 ,val 1
+                                                                ipSrc_per_Srv2.put(ipPacket.getSourceAddress(),temp2_mapL2);// key = srcIP , val = temp2_map_L2
+                                                                ipSrcPort_per_Srv.put(dst_ip,ipSrc_per_Srv2);
+                                                                // tcpPacket.getSourcePort() replaced with 555
                                                         }
                                                         else
                                                         {
                                                                 // we will unpack and store mapL2 . Following this , we will extract mapL3 out of mapL3 which can be directly modified
                                                                 // since we alredy have mapL2 ie temp3_mapL2 <key=srcIP,val =mapL3<key=srcPort>>
-                                                                temp2_mapL2 = temp3_mapL2.get(ipPacket.getSourceAddress());// Note: don't confuse with name mapL2 with Level2 as intended for reusabilty
-                                                                temp2_mapL2.put(tcpPacket.getSourcePort(),temp2_mapL2.get(tcpPacket.getSourcePort())+1);// updated mapL3
-                                                                temp3_mapL2.put(ipPacket.getSourceAddress(),temp2_mapL2);//updated mapL2
-                                                                ipSrcPort_per_Srv.put(dst_ip,temp3_mapL2);
+                                                                temp2_mapL2 = ipSrc_per_Srv2.get(ipPacket.getSourceAddress());// Note: don't confuse with name mapL2 with Level2 as intended for reusabilty
+                                                                temp2_mapL2.put(555,temp2_mapL2.get(555)+1);// updated mapL3
+                                                                ipSrc_per_Srv2.put(ipPacket.getSourceAddress(),temp2_mapL2);//updated mapL2
+                                                                ipSrcPort_per_Srv.put(dst_ip,ipSrc_per_Srv2);
                                                         }
                                                 }
                                         }
@@ -636,14 +638,24 @@ public class AppComponent {
                         // If attack detected then calling for Mitigation
                         if (attack == 1) {
                                 //IF Mitigation Phase_I is already in Execution, DO_NOTHING
+                            int ip_key = 0;
+                            String [] split_stringIp = new String[4];
                                 if (mitigationFlag == 0){
                                         mitigationFlag = 1;
                                         String[] stringIps = Servers.getServerIpAddresses();
                                         for (String stringIp : stringIps){
-                                                IpAddress ipAddress = IpAddress.valueOf(stringIp);
-                                                ipSrc_per_Srv.put(ipAddress,null);// map 3 layer
+                                                //IpAddress ipAddress = IpAddress.valueOf(stringIp);
+                                                log.info("This is original IP string :" + stringIp);
+                                                split_stringIp = stringIp.split(".");
+                                                stringIp = "";
+                                                for(String temp_ip : split_stringIp){
+                                                    stringIp = stringIp + temp_ip; 
+                                                }
+                                                ip_key = Integer.parseInt(stringIp);
+                                                log.info("This is parsed IP from String to Integer  :" + String.valueOf(ip_key));
                                                 // error previously found was :  incompatible types: org.onlab.packet.IpAddress cannot be converted to java.lang.Integer
                                                 srv_under_mitPhase.put(stringIp,0);
+                                                ipSrc_per_Srv.put(ip_key,null);// map 3 layer
                                 }
                         }
                         // -----------------------------------------------------------------------------
