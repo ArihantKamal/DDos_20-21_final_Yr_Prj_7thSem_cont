@@ -28,6 +28,9 @@ import org.onlab.packet.Ip4Prefix;
 import org.onlab.packet.IpAddress;
 import org.onlab.packet.IPv4;
 import org.onlab.packet.TCP;
+import org.onlab.packet.UDP;
+import org.onlab.packet.ICMP;
+import org.onlab.packet.IPacket;
 import org.onosproject.core.ApplicationId;
 import org.onosproject.core.CoreService;
 import org.onlab.packet.MacAddress;
@@ -43,6 +46,8 @@ import org.onosproject.net.flow.FlowRuleService;
 import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.flow.criteria.Criteria;
 import org.onosproject.net.flow.criteria.Criterion;
+import org.onosproject.net.flow.criteria.TcpPortCriterion;
+import org.onosproject.net.flow.criteria.IPCriterion;
 import org.onosproject.net.flowobjective.FlowObjectiveService;
 
 import org.onosproject.net.host.HostService;
@@ -102,11 +107,16 @@ public class AppComponent {
         /*
            Flow feature variables.
          */
+
+
+
         // ----- for Version 2.0
         private Map<Integer, Integer> srcIps_dstVictimIps = new HashMap<Integer, Integer>(); //Count of Server IPs in Network , just initiallized after Attack Detection
         private HashMap<Integer, HashMap<Byte,Integer>> ipProtocols_per_Srv = new HashMap<Integer, HashMap<Byte,Integer>>(); //Count of Ip Protocols
         private HashMap<Integer, HashMap<Integer,Integer>> ipSrc_per_Srv = new HashMap<Integer, HashMap<Integer,Integer>>(); //Count of Ip Protocols
-        private HashMap<Integer, HashMap<Integer,Integer>> ipSrc_per_Srv2 = new HashMap<Integer, HashMap<Integer,Integer>>(); // temp DS taken
+        private HashMap<Integer, HashMap<Integer,Integer>> icmp_per_Src_per_Srv = new HashMap<Integer, HashMap<Integer,Integer>>(); //Count of Ip Protocols
+
+        private HashMap<Integer, HashMap<Integer,Integer>> tcpSrcPort_per_SrcIP = new HashMap<Integer, HashMap<Integer,Integer>>(); // !!!!!! we may change its name
 
         //public java.util.HashMap<Integer, Hashmap<Integer,Integer>> temp3_mapL2 = new java.util.HashMap <Integer,Hashmap<Integer,Integer>>();
         //public java.util.HashMap<Integer, Hashmap<Integer,Integer>> temp5_mapL2 = new java.util.HashMap <Integer,Hashmap<Integer,Integer>>();
@@ -123,10 +133,28 @@ public class AppComponent {
          */
 
         private double ipProtocolEntropy2 = 0.0; //ip protocol entropy
+        private double srcIpIcmpEntropy = 0.0; //icmp protocol entropy
+        private double srcPortEntropyPerIP = 0.0;
+        private double avgSrcPortEntropyPerIP = 0.0;
+
         private DeviceId deviceId;
+        private HostLocation hostLocation;
         private MacAddress macAddress;
         private String stringIp;
+
+        private int servUnderMonitorin_count = 0;
+
+        private int just_once=1;
+        private int test = 0;
+
+        private int test_count_flowRuleService = 0;
+        private int exception_free_flowRuleService = 1;
+
+        private int iterationSize = 1;// used for setting how much data to collect : useful in case for Version 2 Blocks , yield of Data is too less using Test Attack traffic
+        private int iterationCount = 0;// accompanied to iterationSize
+
         // ------------------------ end of Declaration for V2
+
 
         private long bytes_in = 0; //bytes_in
         private long bytes_out = 0; //bytes_out
@@ -184,11 +212,13 @@ public class AppComponent {
           Class InPacketProcessor implements PacketProcessor interface.
           It is for intercepting traffic for flow features calculation
          */
-        private class InPacketProcessor implements PacketProcessor {
+        private class InPacketProcessor implements PacketProcessor
+        {
 
                 //process() process packet_ins.
                 @Override
-                public void process(PacketContext context) {
+                public void process(PacketContext context) 
+                {
                         //if packet_in is already handled abort.
                         if (context.isHandled()) {
                                 return;
@@ -197,10 +227,27 @@ public class AppComponent {
                         //Getting ethernet frame from packet_in
                         Ethernet eth = context.inPacket().parsed();
                         //checking whether frame contains IPv4 packet
-
-                        if (eth.getEtherType() == Ethernet.TYPE_IPV4) {
+                    try
+                    {
+                        if (eth.getEtherType() == Ethernet.TYPE_IPV4) 
+                        {
                                 //Getting IPv4 packet from ethernet frame
                                 IPv4 ipPacket = (IPv4)eth.getPayload();
+
+                                
+                                if (ipPacket.getProtocol() ==IPv4.PROTOCOL_TCP)
+                                {
+                                        IPacket pkt2 = eth.getPayload();
+                                        IPacket payload2 = pkt2.getPayload();
+                                        // test = 
+                                        log.info("Value of Source Port : {}",String.valueOf(((TCP) payload2).getSourcePort()));
+                                }
+                                            // if (ipPacket.getProtocol() ==IPv4.PROTOCOL_ICMP)
+                                            // {
+                                            //         // test = ((TCP) payload2).getSourcePort();
+                                            //         log.info("Got an ICMP pckt : {}",String.valueOf(test));
+                                            //         test += 1; 
+                                            // }
 
 
                                 /*
@@ -208,7 +255,8 @@ public class AppComponent {
                                 ip protocol in
                                  Map for calculation of entropies.
                                  */
-                                if (ipPacket != null) {
+                                if (ipPacket != null)
+                                {
                                         try {
                                                 //Acquiring access  to critical section.
                                                 semaphore.acquire();
@@ -227,14 +275,8 @@ public class AppComponent {
                                                 srcIps.put(ipPacket.getSourceAddress(),
                                                            srcIps.get(ipPacket.getSourceAddress())+1);
                                         }
-                                        /**log.info("Printing Details of Packet_IN :");
-                                        String[] stringIps = Servers.getServerIpAddresses();
-                                        for (String stringIp : stringIps){
-                                            log.info("ServerIP are : " + stringIp);
-                                            log.info(stringIp);
-                                        }*/
-                                        //log.info(IpAddress.toString(ipPacket.getSourceAddress()));
-                                        //log.info(IpAddress.toString(ipPacket.getDestinationAddress()));
+                                        
+
                                         if (dstIps.get(ipPacket.getDestinationAddress()) == null) {
                                                 dstIps.put(
                                                         ipPacket.getDestinationAddress(), 1);
@@ -249,79 +291,220 @@ public class AppComponent {
                                                 ipProtocols.put(ipPacket.getProtocol(),
                                                                 ipProtocols.get(ipPacket.getProtocol())+1);
                                         }
+                                        log.info("Senior's block 1 exeuted in  PacketProcessor");
 
                                         // ---------- Block_2 Code for version - 2.0
-                                        int dst_ip = ipPacket.getDestinationAddress();
-                                        if (mitigationFlag == 1)
+
+
+
+                                try
+                                  {
+                                        if (mitigationFlag == 1 /*true*/) // --- replce with Mitigation Flag
                                         {
-                                                if (ipSrc_per_Srv.containsKey(dst_ip))//whether pckt for this dstIP is under Monitoring
+                                            int dst_ip = ipPacket.getDestinationAddress();
+
+
+                                                // if (ipPacket != null) {
+                                                //         if (payload instanceof TCP) {
+                                                
+                                                if (srv_under_mitPhase.containsKey(IPv4.fromIPv4Address(dst_ip)) /*ipSrc_per_Srv.containsKey(dst_ip)*/)// chekcing if it is Relevant //whether pckt for this dstIP is under Monitoring [31-12] zzz.. Replace with the String one so that we can effectively clear things up
                                                 {
+                                                    IPacket pkt = eth.getPayload();
+                                                    IPacket payload = pkt.getPayload();
+                                                    //log.info("Created 2 object for Ip packets");
+                                                        // log.info("Found required Values in ipSrc_per_Srv MAP");
+                                                        log.info("Got flow for Server : {}",IPv4.fromIPv4Address(dst_ip));
+                                                        log.info("Protocol Number is: {}",ipPacket.getProtocol());
                                                         //Goal 1 :Handle insertion for Protocol Entropy
-                                                        //Handle insertion for Source Host(IP) Entropy
-                                                        //Handle insertion for Source Host's TransportLayer Port (1st we will just consider TCP and !!!not UDP)
                                                         
                                                         //Goal 1: s1. Load map at level 2 of Key=dst_ip into a temp Variable ; in case not existing then Initialize with key = dst_ip ,Val = an Empty Map ,
                                                                 // s2. Update its info. using new Count Values and then replace Map_L1 with same key= dst_ip but val=this updated Map_L2
-                                                        HashMap <Byte,Integer> temp_mapL2 = ipProtocols_per_Srv.get(dst_ip);//
-                                                        if(temp_mapL2 == null)
+
+                                                        HashMap <Byte,Integer> temp_mapL2 = null;//ipProtocols_per_Srv.get(dst_ip) // Retruns Value: null or a MAP  -- !!!!!!!!!!!
+                                                        if(ipProtocols_per_Srv.get(dst_ip) == null) // 2 cases > either Key is Non Existing or > Key exists but value is NULL
                                                         {
-                                                                // temp_mapL2 = new HashMap<Byte,Integer>();
+                                                                temp_mapL2 = new HashMap<Byte,Integer>();
                                                                 temp_mapL2.put(ipPacket.getProtocol(),1);
                                                                 ipProtocols_per_Srv.put(dst_ip, temp_mapL2);
+                                                                // log.info("Value ipProtocol for srv. initialized");
+                                                                // log.info("Inserted a new Key value for ipProtocols_per_Srv");
                                                         }
                                                         else{
-                                                                //temp_mapL2 = ipProtocols_per_Srv.get(dst_ip);//return mapL2
-                                                                temp_mapL2.put(ipPacket.getProtocol(),temp_mapL2.get(ipPacket.getProtocol())+1);
+                                                                temp_mapL2 = ipProtocols_per_Srv.get(dst_ip);//return mapL2
+                                                                if (temp_mapL2.containsKey(ipPacket.getProtocol()))
+                                                                {
+                                                                        temp_mapL2.put(ipPacket.getProtocol(),temp_mapL2.get(ipPacket.getProtocol()) +1);
+                                                                }else{
+                                                                        temp_mapL2.put(ipPacket.getProtocol(), 1);
+                                                                }
                                                                 ipProtocols_per_Srv.put(dst_ip,temp_mapL2);//replace with updated val
+                                                                // log.info("Value ipProtocol for srv. updated");
+                                                                // log.info("updated ipProtocols_per_Srv with count value ");
                                                         }
-                                                        
+
+                                                        // ------------ Part 2
                                                         // Goal2 : for calc. of src ip entropy        
-                                                        HashMap <Integer,Integer> temp2_mapL2 = ipSrc_per_Srv.get(dst_ip);//returns mapL2 
-                                                        if(temp2_mapL2 == null)
+                                                        HashMap <Integer,Integer> temp2_mapL2 = null;// ipSrc_per_Srv.get(dst_ip) // returns mapL2  null -- !!!!!!!!!!!
+                                                        if(ipSrc_per_Srv.get(dst_ip) == null)
                                                         {
-                                                                // temp_mapL2 = new HashMap<Byte,Integer>();
+                                                                temp2_mapL2 = new HashMap<Integer,Integer>();
                                                                 temp2_mapL2.put(ipPacket.getSourceAddress(),1);
                                                                 ipSrc_per_Srv.put(dst_ip, temp2_mapL2);
+                                                                // log.info("Value ipSrc_per_Srv for srv. initialized");
+                                                                // log.info("Inserted a new Key value for ipSrc_per_Srv");
                                                         }
                                                         else{
                                                                 temp2_mapL2 = ipSrc_per_Srv.get(dst_ip);//return mapL2
-                                                                temp2_mapL2.put(ipPacket.getSourceAddress(),temp2_mapL2.get(ipPacket.getSourceAddress())+1);
+                                                                if (temp2_mapL2.containsKey(ipPacket.getSourceAddress()))
+                                                                {
+                                                                        temp2_mapL2.put(ipPacket.getSourceAddress(),temp2_mapL2.get(ipPacket.getSourceAddress())+1);
+                                                                }else{
+                                                                        temp2_mapL2.put(ipPacket.getSourceAddress(),1);
+                                                                }
+
+                                                                
                                                                 ipSrc_per_Srv.put(dst_ip,temp2_mapL2);//replace with updated val
+                                                                // log.info("Value ipSrc_per_Srv for srv. updated");
+                                                                // log.info("updated ipSrc_per_Srv with count value ");
                                                         }
 
-                                                        // Goal 3 :entropy of ports per IP
-                                                        // Level 
-                                                        // for Level 3 we will Reuse temp2_mapL2 which has suitable structure for Port(<int,int>) same as used earlier for IP's entropy calc.
-                                                        
-                                                        /*ipSrc_per_Srv2 =ipSrcPort_per_Srv.get(dst_ip);//returns mapL2
-                                                        if (ipSrc_per_Srv2 == null)
+
+                                                        // ------------------------------------------------------------------- ICMP-----------------
+                                                        if (ipPacket.getProtocol() ==IPv4.PROTOCOL_ICMP)
                                                         {
-                                                                // temp3_mapL2 = new  HashMap<int,Hashmap<int,int>>()
-                                                                // first we will generate map for Base level i.e. mapL3 -> then we will insert this into temp3_mapL2 at Level 2 
-                                                                //which will then insert into Top mapLevel 1 i.e. ipSrcPort_per_Srv itself
+                                                                // log.info("Got an ICMP packet");
                                                                 
-                                                                temp2_mapL2.clear();// clearing this for Reusability as compatible for layer 3rd
-                                                                temp2_mapL2.put(555,1);// ex. key =port 555 ,val 1
-                                                                ipSrc_per_Srv2.put(ipPacket.getSourceAddress(),temp2_mapL2);// key = srcIP , val = temp2_map_L2
-                                                                ipSrcPort_per_Srv.put(dst_ip,ipSrc_per_Srv2);
-                                                                // tcpPacket.getSourcePort() replaced with 555
-                                                        }
-                                                        else
+                                                                temp2_mapL2.clear();
+                                                                // temp2_mapL2 = icmp_per_Src_per_Srv.get(dst_ip);// returns map at base level of type <int = src_IP, count>
+
+                                                                if(icmp_per_Src_per_Srv.get(dst_ip) == null)
+                                                                {
+                                                                        temp2_mapL2 = new HashMap<Integer,Integer>();// !!! Good as if was Null then has been dealt with Recovery of loss of Object
+                                                                        temp2_mapL2.put(ipPacket.getSourceAddress(),1);
+                                                                        icmp_per_Src_per_Srv.put(dst_ip, temp2_mapL2);
+                                                                        // log.info("Value icmp_per_Src_per_Srv for srv. initialized");
+                                                                        // log.info("Inserted a new Key value for icmp_per_Src_per_Srv");
+                                                                }
+                                                                else{
+                                                                        temp2_mapL2 = icmp_per_Src_per_Srv.get(dst_ip);//return mapL2
+                                                                        if (temp2_mapL2.containsKey(ipPacket.getSourceAddress()))
+                                                                        {
+                                                                                temp2_mapL2.put(ipPacket.getSourceAddress(),temp2_mapL2.get(ipPacket.getSourceAddress())+1);
+                                                                        }else{
+                                                                                temp2_mapL2.put(ipPacket.getSourceAddress(),1);
+                                                                        }
+
+                                                                        icmp_per_Src_per_Srv.put(dst_ip,temp2_mapL2);//replace with updated val
+                                                                        // log.info("Value icmp_per_Src_per_Srv for srv. updated");
+                                                                        // log.info("updated icmp_per_Src_per_Srv with count value ");
+                                                                }
+
+
+
+                                                                // if (temp2_mapL2 == null)
+                                                                // {
+                                                                //         // temp3_mapL2 = new  HashMap<int,Hashmap<int,int>>()
+                                                                //         // first we will generate map for Base level i.e. mapL3 -> then we will insert this into temp3_mapL2 at Level 2 
+                                                                //         //which will then insert into Top mapLevel 1 i.e. ipSrcPort_per_Srv itself
+                                                                        
+                                                                //         temp2_mapL2 = new HashMap<Integer,Integer>();;// clearing this for Reusability as compatible for LAYER 3rd
+                                                                //         //temp2_mapL2.put(tcpPacket.getSourcePort(),1);// ex. key =port 555 ,val 1
+                                                                //         temp2_mapL2.put(ipPacket.getSourceAddress(),1);// key = srcIP , val = temp2_map_L2
+                                                                //         icmp_per_Src_per_Srv.put(dst_ip,temp2_mapL2);
+                                                                //         // tcpPacket.getSourcePort() replaced with 555
+                                                                // }
+                                                                // else
+                                                                // {
+                                                                //         // we will unpack and store mapL2 . Following this , we will extract mapL3 out of mapL3 which can be directly modified
+                                                                //         // since we alredy have mapL2 ie temp3_mapL2 <key=srcIP,val =mapL3<key=srcPort>>
+                                                                        
+                                                                //         // temp2_mapL2 = ipSrc_per_Srv2.get(ipPacket.getSourceAddress());// Note: don't confuse with name mapL2 with Level2 as intended for reusabilty
+                                                                //         // temp2_mapL2.put(tcpPacket.getSourcePort(),temp2_mapL2.get(tcpPacket.getSourcePort())+1);// updated mapL3
+                                                                //         temp2_mapL2.put(ipPacket.getSourceAddress(),temp2_mapL2.get(ipPacket.getSourceAddress())+1);//updated mapL2
+                                                                //         icmp_per_Src_per_Srv.put(dst_ip,temp2_mapL2);
+                                                                // }
+                                                                
+                                                        }// just grab the packet from here
+
+                                                        //-----------------------------TCP-port------------------------------- 
+
+
+                                                
+                                                        if (ipPacket.getProtocol() ==IPv4.PROTOCOL_TCP)
                                                         {
-                                                                // we will unpack and store mapL2 . Following this , we will extract mapL3 out of mapL3 which can be directly modified
-                                                                // since we alredy have mapL2 ie temp3_mapL2 <key=srcIP,val =mapL3<key=srcPort>>
-                                                                temp2_mapL2 = ipSrc_per_Srv2.get(ipPacket.getSourceAddress());// Note: don't confuse with name mapL2 with Level2 as intended for reusabilty
-                                                                temp2_mapL2.put(555,temp2_mapL2.get(555)+1);// updated mapL3
-                                                                ipSrc_per_Srv2.put(ipPacket.getSourceAddress(),temp2_mapL2);//updated mapL2
-                                                                ipSrcPort_per_Srv.put(dst_ip,ipSrc_per_Srv2);
-                                                        }*/
-                                                }
-                                        }
-                                        // ---------- End of - 2.0
+                                                                        int test1 = 0;
+                                                                        TCP tcpPacket = (TCP) payload;
+                                                                        test1  = tcpPacket.getSourcePort();
+                                                                        log.info("!!!!!!!++++++++++++Got TCP packet from Source Port : {}",String.valueOf(test1) + " from Source: " + IPv4.fromIPv4Address(ipPacket.getSourceAddress()));
+                                                                        
+
+
+                                                                        HashMap <Integer,Integer> temp3_mapL2 = new HashMap <Integer,Integer>();
+                                                                        temp3_mapL2.clear();// !!!!!!!!!!!!!!!!!!!!!!!!!!
+                                                                        tcpSrcPort_per_SrcIP.clear();//  since intermediate DS , so could be cleared
+                                                                        if (ipSrcPort_per_Srv.get(dst_ip) == null)//!!!!!!!!! if serverIP exists them => Value if Null
+                                                                        {
+                                                                                // temp3_mapL2 = new  HashMap<int,Hashmap<int,int>>()
+                                                                                // first we will generate map for Base level i.e. mapL3 -> then we will insert this into temp3_mapL2 at Level 2 
+                                                                                //which will then insert into Top mapLevel 1 i.e. ipSrcPort_per_Srv itself
+                                                                                
+                                                                                // log.info("!!! ++++++++++++Found ipSrcPort_per_Srv.get(dst_ip) AS null for dst_ip:  {}",IPv4.fromIPv4Address(dst_ip));
+                                                                                temp3_mapL2.put(tcpPacket.getSourcePort(),1);// ex. key =port 555 ,val 1
+                                                                                
+                                                                                
+                                                                                tcpSrcPort_per_SrcIP.put(ipPacket.getSourceAddress(),temp3_mapL2);// key = srcIP , val = temp2_map_L2
+                                                                                ipSrcPort_per_Srv.put(dst_ip,tcpSrcPort_per_SrcIP);
+                                                                                // tcpPacket.getSourcePort() replaced with 555
+                                                                                // log.info("++++++++++++Value ipSrcPort_per_Srv for srv. initialized");
+                                                                                // log.info("++++++++++++Inserted a new Key value for ipSrcPort_per_Srv");
+                                                                        }
+                                                                        else
+                                                                        {
+                                                                                tcpSrcPort_per_SrcIP =ipSrcPort_per_Srv.get(dst_ip);// !!! if this is set to NULL then => we loose property of holding an Object , and also that obj will be flushed
+                                                                                // we will unpack and store mapL2 . Following this , we will extract mapL3 out of mapL3 which can be directly modified
+                                                                                // since we alredy have mapL2 ie temp3_mapL2 <key=srcIP,val =mapL3<key=srcPort>>
+                                                                                if (tcpSrcPort_per_SrcIP.containsKey(ipPacket.getSourceAddress()))
+                                                                                {      
+                                                                                                temp3_mapL2 = tcpSrcPort_per_SrcIP.get(ipPacket.getSourceAddress());// Note: don't confuse with name mapL2 with Level2 as intended for reusabilty
+                                                                                                if(temp3_mapL2.containsKey(tcpPacket.getSourcePort())){
+                                                                                                        //temp3_mapL2.put(tcpPacket.getSourcePort(),temp3_mapL2.get(tcpPacket.getSourcePort())+1);
+                                                                                                        // log.info("++++++++++++Value Updated in block TCP - map");
+                                                                                                        log.info("Already initialized .. so won't be done again to stop overriding Values inserted by getFlowInfo() at TcpPortCriterion");
+                                                                                                }
+                                                                                                else{
+                                                                                                        temp3_mapL2.put(tcpPacket.getSourcePort(),1);
+                                                                                                        // log.info("++++++++++++New Port inserted");
+                                                                                                }
+                                                                                }else
+                                                                                {
+                                                                                                temp3_mapL2.put(tcpPacket.getSourcePort(),1);
+                                                                                                // log.info("++++++++++++New Port inserted");          
+                                                                                }
+                                                                                tcpSrcPort_per_SrcIP.put(ipPacket.getSourceAddress(),temp3_mapL2);
+                                                                                ipSrcPort_per_Srv.put(dst_ip,tcpSrcPort_per_SrcIP);
+                                                                        }
+                                                                
+                                                        }// just grab the packet from here  // IPv4.PROTOCOL_TCP
+
+                                                }//if (ipSrc_per_Srv.containsKey(dst_ip)) ends here
+                                                else{
+                                                        log.info("Not found Server's iP address in Packet_IN as Destined to : " + IPv4.fromIPv4Address(dst_ip));
+                                                    }
+                                        }// mitigation flag ends
+                                   }catch(Exception e){
+                                           log.info("caught exception in Mitigation Block");
+                                   }
+
                                         //releasing critical section
                                         semaphore.release();
+                                }//ipPacket != null ends here
+                                else{
+                                    log.info("IP Packet was NULL");
                                 }
-                        }
+                        }// if Ethernet.TYPE_IPV4 ends here
+                    }catch(Exception e){
+                        log.info("Caught exception in Packet Processor Block : {}",e);
+                    }
                 }//end of process()
         }//end of InPacketProcessor
 
@@ -338,229 +521,463 @@ public class AppComponent {
                  * destination ips and ip protocols from maps.
                  */
                 String entries_To_be_Sent = "";
+                public void getFlowInfo() 
+                {
+                    /*String */entries_To_be_Sent = "";
+                        try
+                        {
+                            //getting hosts in Topology
+                            Iterable<Host> hosts = hostService.getHosts();
 
-                public void getFlowInfo() {
-                        counter_debug += 1;
-                        log.info("Iteration Count in FlowInfo :" + String.valueOf(counter_debug) );
-                        //getting hosts in Topology
-                        Iterable<Host> hosts = hostService.getHosts();
+                            //computing bytes_in, bytes_out and frames from counters at port of hosts.
+                            for( Host host : hosts) 
+                            {
+                                    HostLocation hostLocation = host.location();
+                                    PortStatistics portStat =
+                                            deviceService.getDeltaStatisticsForPort(
+                                                    hostLocation.deviceId(),
+                                                    hostLocation.port());
+                                    bytes_in += portStat.bytesReceived();
+                                    bytes_out += portStat.bytesSent();
+                                    frames += portStat.packetsReceived() + portStat.packetsSent();
+                            }
 
-                        //computing bytes_in, bytes_out and frames from counters at port of hosts.
-                        for( Host host : hosts) {
-                                HostLocation hostLocation = host.location();
-                                PortStatistics portStat =
-                                        deviceService.getDeltaStatisticsForPort(
-                                                hostLocation.deviceId(),
-                                                hostLocation.port());
-                                bytes_in += portStat.bytesReceived();// Parameter 1
-                                bytes_out += portStat.bytesSent();
-                                frames += portStat.packetsReceived() + portStat.packetsSent();// Parameter 2
+                            //getting flow rule count
+                            flows = flowRuleService.getFlowRuleCount();
+                        }catch(Exception e){
+                            log.info("Something blew up in DDOS 1.0 portion of seniors's code: {}",e);
                         }
 
-                        //getting flow rule count
-                        flows = flowRuleService.getFlowRuleCount();//// Parameter 3
-
-                        //Computing shannon entropy for source IpAddress
-                        double sumOfEntries = 0.0;
-                        for( Integer i : srcIps.keySet()) {
-                                sumOfEntries += srcIps.get(i);
-                        }
-                        for( Integer i : srcIps.keySet()) {
-                                double value = (srcIps.get(i)/ sumOfEntries);
-                                srcIpEntropy += -1*value*(Math.log(value)/Math.log(2));
-                        }
-                        //Computing shannon entropy for destination IpAddress
-                        sumOfEntries = 0;
-                        for( Integer i : dstIps.keySet()) {
-                                sumOfEntries += dstIps.get(i);
-                        }
-                        for( Integer i : dstIps.keySet()) {
-                                double value = (dstIps.get(i)/ sumOfEntries);
-                                dstIpEntropy += -1*value*(Math.log(value)/Math.log(2));
-                        }
-                        //Computing shannon entropy for IP Protocols
-                        sumOfEntries = 0;
-                        for( Byte i : ipProtocols.keySet()) {
-                                sumOfEntries += ipProtocols.get(i);
-                        }
-                        for( Byte i : ipProtocols.keySet()) {
-                                double value = (ipProtocols.get(i)/ sumOfEntries);
-                                ipProtocolEntropy += -1*value*(Math.log(value)/Math.log(2));
-                        }
-                        //-------------------------------------------------------------------------------------------------------------------
-                        // List<String> entries_To_be_Sent = new List<String>();// corrospond to all victim iPs
+                            //Computing shannon entropy for source IpAddress
+                            double sumOfEntries = 0.0;
+                            for( Integer i : srcIps.keySet()) {
+                                    sumOfEntries += srcIps.get(i);
+                            }
+                            for( Integer i : srcIps.keySet()) {
+                                    double value = (srcIps.get(i)/ sumOfEntries);
+                                    srcIpEntropy += -1*value*(Math.log(value)/Math.log(2));
+                            }
+                            //Computing shannon entropy for destination IpAddress
+                            sumOfEntries = 0;
+                            for( Integer i : dstIps.keySet()) {
+                                    sumOfEntries += dstIps.get(i);
+                            }
+                            for( Integer i : dstIps.keySet()) {
+                                    double value = (dstIps.get(i)/ sumOfEntries);
+                                    dstIpEntropy += -1*value*(Math.log(value)/Math.log(2));
+                            }
+                            //Computing shannon entropy for IP Protocols
+                            sumOfEntries = 0;
+                            for( Byte i : ipProtocols.keySet()) {
+                                    sumOfEntries += ipProtocols.get(i);
+                            }
+                            for( Byte i : ipProtocols.keySet()) {
+                                    double value = (ipProtocols.get(i)/ sumOfEntries);
+                                    ipProtocolEntropy += -1*value*(Math.log(value)/Math.log(2));
+                            }
+       
+                        // ---------- Block_2 Code for version - 2.0
+                    if(mitigationFlag == 1)
+                    {
                         String entry_To_be_Sent = "";// corros. to Single Victim IP
-                        long bytes_In_srv = Long.MIN_VALUE;
-                        long bytes_Out_srv = Long.MIN_VALUE;
+                        long bytes_In_srv = 0;// at the server
+                        long bytes_Out_srv = 0;// from the server
                         long pckt_count = 0;
                         int flowCount = 0;
-                        long sum_of_all_flow_life_pckt = 0;
-                        ArrayList <Long> flow_life_pckt = new ArrayList<Long>();
-                        double flow_life_pckt_cnt_Entropy = 0.0;
 
-                        if (mitigationFlag ==1)
+                        // For ICMP traffic
+                        /*
+                        long bytes_In_srv2 = 0;// at the server
+                        long bytes_Out_srv2 = 0;// from the server
+                        long pckt_count2 = 0;
+                        int flowCount2 = 0;*/
+
+                        // long sum_of_all_flow_life_pckt = 0;
+                        // ArrayList <Long> flow_life_pckt = new ArrayList<Long>();
+                        // double flow_life_pckt_cnt_Entropy = 0.0;
+
+                        for (String srvIP_string : srv_under_mitPhase.keySet() /*int srvIP : ipSrc_per_Srv.keySet()*/ )// say 5 serv.  // [31-12] to be changed to Just one String case dependencies
                         {
-                                // lets get the mapL2 at once 
-                                // Part1{All flow related Informations} and Part2(calc. out of DataStructure for Entropies)
-                                // 
-
-                                for (int srvIP : ipSrc_per_Srv.keySet())// say 5 serv.
-                                {
                                         //clear ?????? vector-----------;
+
                                         //converting string to IpAddress
                                         //     IpAddress ipAddress = IpAddress.valueOf(stringIp);
                                         //getting host from IpAddress
-                                        entry_To_be_Sent = String.valueOf(srvIP);//appending current ServerIP
-                                        IpAddress ipAddress = IpAddress.valueOf(srvIP);
+                            int srvIP = IPv4.toIPv4Address(srvIP_string);
+                                try
+                                {
+                                        entry_To_be_Sent = String.valueOf(srvIP);//appending current ServerIP  !!! take care of From/TO_ipv4_Address
+                                        String stringIp = (IPv4.fromIPv4Address(srvIP));
+
+
+
+                                        IpAddress ipAddress = IpAddress.valueOf(stringIp);// !!! corrected IP address type
                                         Set<Host>  hostSet = hostService.getHostsByIp(ipAddress);///!!!!!this is from where Things get Right
+
                                         for (Host host : hostSet) 
                                         {
                                         //Getting immediate device to server(location in term of switch)
-                                        MacAddress macAddress = host.mac();
-                                        HostLocation hostLocation = host.location();
-                                        DeviceId deviceId = hostLocation.deviceId();// edge Switch identification
+                                        // MacAddress macAddress = host.mac();
+                                        // HostLocation hostLocation = host.location();
+                                        // DeviceId deviceId = hostLocation.deviceId();// edge Switch identification
+                                        // !!!!!!!!!!!!!!  Note that since in present scenario , one Host is behind one IP for server so below alternative will work but 
+                                        //you should generally change things
+
+                                        macAddress = host.mac();
+                                        hostLocation = host.location();
+                                        deviceId = hostLocation.deviceId();// (adjacent to edge) Switch identification
                                         }
-                                        //getting MacAddress of server
-
-
-                                        //------ Remember to accomodate Bidirectional Traffic Selector ----
-
-                                        Iterable<FlowEntry> flowEntries = Iterables.concat(
-                                                flowRuleService.getFlowEntriesByState(deviceId, FlowEntry.FlowEntryState.ADDED),
-                                                flowRuleService.getFlowEntriesByState(deviceId, FlowEntry.FlowEntryState.PENDING_ADD));
-                                        //Loop to check flow entry match
-                                        for (FlowEntry flowEntry : flowEntries)
-                                        {
-                                                log.info("flow-entry from system: "+flowEntry.toString());
-
-                                                //traffic selector for flow rule checking(Empty)
-                                                TrafficSelector.Builder selectorBuilder = DefaultTrafficSelector.builder();// should be declare upfront and regularly flushed/cleared for Reusanitliy
-                                                TrafficSelector.Builder selectorBuilder_bck_flow = DefaultTrafficSelector.builder();// should be declare upfront and regularly flushed/cleared for Reusanitliy
-
-                                                Set<Criterion> criteria = flowEntry.selector().criteria();
-
-                                                //Setting all parameters same(cpy as it is) except one that determines traffic (so in 2nd case we would skip src.Port and later on Add things there)
-                                                for (Criterion criterion : criteria) 
+                                                //getting MacAddress of server
+                                                //------ Remember to accomodate Bidirectional Traffic Selector ----
+                                                // log.info("Going to fetch FLOW entries !!!App may Crash if Traffic is not running and thus flowRuleService is DOWN ");// if app does not crashes , then we should not face errors
+                                                // /*
+                                                Iterable<FlowEntry> flowEntries = null;
+                                                try
                                                 {
-                                                        //1ST block corrosponds to traffic destined to server
-                                                        if (criterion.type() != Criterion.Type.ETH_DST &&
-                                                                criterion.type() != Criterion.Type.IPV4_DST) {
-                                                        selectorBuilder.add(criterion);
-                                                        }//TCP_SRC : matchTcpSrc(TpPort tcpPort)
+                                                    /*Iterable<FlowEntry> */flowEntries = Iterables.concat(
+                                                            flowRuleService.getFlowEntriesByState(deviceId, FlowEntry.FlowEntryState.ADDED),
+                                                            flowRuleService.getFlowEntriesByState(deviceId, FlowEntry.FlowEntryState.PENDING_ADD));//!! Sometimes raises error else fine(In that case use :getFlowEntriesById(fwd,ddos2))
+                                                        // try using try catch just for this Block and you could use CLEAR in finally BLOCK @_@ >> cool !!!
+                                                    exception_free_flowRuleService = 1;
+                                                        // */
 
-                                                        //2nd block corrosponds to traffic originating from server
-                                                        if (criterion.type() != Criterion.Type.ETH_SRC &&
-                                                                criterion.type() != Criterion.Type.IPV4_SRC) {
-                                                        selectorBuilder_bck_flow.add(criterion);
-                                                        }//TCP_SRC : matchTcpSrc(TpPort tcpPort)
+                                                        /*
+                                                        Iterable<FlowEntry> flowEntries = Iterables.concat(
+                                                                flowRuleService.getFlowEntriesById(coreService.getAppId("org.onosproject.fwd")),
+                                                                flowRuleService.getFlowEntriesById(appId) );// output would be obj of type : ApplicationId id and INPUT is : String
+                                                        */
+                                                }catch(Exception e)
+                                                {
+                                                    // log.info("flowRuleService returned Exception for this iteration {}",e);
+                                                    test_count_flowRuleService += 1;
+                                                    log.info("ERROR_count_flowRuleService risen to {}",test_count_flowRuleService);
+                                                    exception_free_flowRuleService = 0;
                                                 }
 
-                                                //Adding required criterias
-                                                selectorBuilder.add(Criteria.matchEthDst(macAddress));
-                                                selectorBuilder.add(Criteria.matchIPDst(Ip4Prefix.valueOf(srvIP,32)));//.valueOf(java.lang.String address) : Converts a CIDR (slash) notation string (e.g., "10.1.0.0/16") into an IPv4 prefix.
-                                                //Adding required criterias
-                                                selectorBuilder_bck_flow.add(Criteria.matchEthSrc(macAddress));
-                                                selectorBuilder_bck_flow.add(Criteria.matchIPSrc(Ip4Prefix.valueOf(srvIP,32)));//.valueOf(java.lang.String address) : Converts a CIDR (slash) notation string (e.g., "10.1.0.0/16") into an IPv4 prefix.
-                                                /*
-                                                /*
-                                                valueOf(int address, int prefixLength)
-                                                Converts an integer and a prefix length into an IPv4 prefix.
-                                                */
+                                                //Loop to check flow entry match
+                                                // log.info("Entering Flow Block");
+                                                // /*
+                                            if(exception_free_flowRuleService != 0)
+                                            {
+                                                int countFlowEntry = 0;
+                                                for (FlowEntry flowEntry : flowEntries)
+                                                {       countFlowEntry += 1;
+                                                        // %%^&%&^$$%$^ Uncomment below to print FlowEntry details for Debugging
+                                                    //
+                                                    //    log.info("flow-entry from system: #{} " + flowEntry.toString() , countFlowEntry);
+                                                        // try
+                                                        // {
+                                                                //traffic selector for flow rule checking(Empty)
+                                                                TrafficSelector.Builder selectorBuilder = DefaultTrafficSelector.builder();// should be declare upfront and regularly flushed/cleared for Reusanitliy
+                                                                TrafficSelector.Builder selectorBuilder_bck_flow = DefaultTrafficSelector.builder();// should be declare upfront and regularly flushed/cleared for Reusanitliy
 
-                                                // @Kamal we will add the criteria for Source Ports here itself
-                                                //Building required traffic selector
-                                                TrafficSelector trafficSelector = selectorBuilder.build();//------??? yet to build a reverse traffic selector for Bytes_OUT
-                                                TrafficSelector trafficSelector_bck_flow = selectorBuilder_bck_flow.build();//------??? yet to build a reverse traffic selector for Bytes_OUT
-                                                // to calc. No. of Frames , Bytes_IN && Bytes_OUT and No. of Flows
-                                                long curr_flow_pckt = 0;
-                                                long curr_flow_life_pckt = 0;
-                                                if (deviceId.equals(flowEntry.deviceId()) &&
-                                                        trafficSelector.equals(flowEntry.selector()) )
-                                                { // Match implies current Flow entry is relevant to us for Further Calc.
-                                                        //selecting flowEntry with maximum bytes_in     //Input port Field for portCriterion should not be null
-                                                        // Now from this flow entry , we are going to extract required Features such as (Bytes)
-                                                        bytes_In_srv += flowEntry.bytes();
-                                                        curr_flow_pckt = flowEntry.packets();
-                                                        pckt_count += curr_flow_pckt;
-                                                        flowCount += 1;
+                                                                Set<Criterion> criteria = flowEntry.selector().criteria();
 
-                                                        curr_flow_life_pckt = curr_flow_pckt * flowEntry.life();//New Feature to be inserted in a Vector of String or Long
-                                                        flow_life_pckt.add(curr_flow_life_pckt);
-                                                        sum_of_all_flow_life_pckt += curr_flow_life_pckt;
-                                                        //setting that flow rule match found
-                                                        // flag = 1;
+                                                                //Setting all parameters same(cpy as it is) except one that determines traffic (so in 2nd case we would skip src.Port and later on Add things there)
+                                                                for (Criterion criterion : criteria) 
+                                                                {
+                                                                        //1ST block corrosponds to traffic destined to server
+                                                                        if (criterion.type() != Criterion.Type.ETH_DST &&
+                                                                                criterion.type() != Criterion.Type.IPV4_DST) {
+                                                                        selectorBuilder.add(criterion);
+                                                                        }//TCP_SRC : matchTcpSrc(TpPort tcpPort)
+
+                                                                        //2nd block corrosponds to traffic originating from server
+                                                                        if (criterion.type() != Criterion.Type.ETH_SRC &&
+                                                                                criterion.type() != Criterion.Type.IPV4_SRC) {
+                                                                        selectorBuilder_bck_flow.add(criterion);
+                                                                        }//TCP_SRC : matchTcpSrc(TpPort tcpPort)
+                                                                }
+                                                                // log.info("Accumulated criterias");
+
+                                                                //Adding required criterias
+                                                                selectorBuilder.add(Criteria.matchEthDst(macAddress));
+                                                                selectorBuilder.add(Criteria.matchIPDst(Ip4Prefix.valueOf(srvIP,32)));//.valueOf(java.lang.String address) : Converts a CIDR (slash) notation string (e.g., "10.1.0.0/16") into an IPv4 prefix.
+                                                                //Adding required criterias
+                                                                selectorBuilder_bck_flow.add(Criteria.matchEthSrc(macAddress));
+                                                                selectorBuilder_bck_flow.add(Criteria.matchIPSrc(Ip4Prefix.valueOf(srvIP,32)));//.valueOf(java.lang.String address) : Converts a CIDR (slash) notation string (e.g., "10.1.0.0/16") into an IPv4 prefix.
+
+                                                                // TcpPortCriterion tcpPortCriterion = (TcpPortCriterion) flowEntry.selector().getCriterion(Criterion.Type.TCP_SRC);
+                                                                
+
+                                                                // @Kamal we will add the criteria for Source Ports here itself
+                                                                //Building required traffic selector
+                                                                TrafficSelector trafficSelector = selectorBuilder.build();
+                                                                TrafficSelector trafficSelector_bck_flow = selectorBuilder_bck_flow.build();//--- a reverse traffic selector for Bytes_OUT
+                                                                // to calc. No. of Frames , Bytes_IN && Bytes_OUT and No. of Flows
+                                                                long curr_flow_pckt = 0;
+                                                                // long curr_flow_life_pckt = 0;
+                                                                if (deviceId.equals(flowEntry.deviceId()) &&
+                                                                        trafficSelector.equals(flowEntry.selector()) /*&& tcpPortCriterion != null*/)
+                                                                { // Match implies current Flow entry is relevant to us for Further Calc.
+                                                                        //selecting flowEntry with maximum bytes_in     //Input port Field for portCriterion should not be null
+                                                                        // Now from this flow entry , we are going to extract required Features such as (Bytes)
+                                                                        bytes_In_srv += flowEntry.bytes();
+                                                                        curr_flow_pckt = flowEntry.packets();
+                                                                        pckt_count += curr_flow_pckt;
+                                                                        flowCount += 1;
+
+                                                                        /*curr_flow_life_pckt = curr_flow_pckt * flowEntry.life();//New Feature to be inserted in a Vector of String or Long
+                                                                        flow_life_pckt.add(curr_flow_life_pckt);
+                                                                        sum_of_all_flow_life_pckt += curr_flow_life_pckt;*/
+
+                                                                        // TcpPortCriterion tcpCrit;
+                                                                        //!!!!!!!!!!!!""££££££££££££££££££££££££££££££££££3  NEW CODE INSERTED ££££££££££££££££/*
+                                                                        TcpPortCriterion tcpCrit = (TcpPortCriterion) flowEntry.selector().getCriterion(Criterion.Type.TCP_SRC);
+                                                                            int srcPort = (tcpCrit == null) ? 0 : tcpCrit.tcpPort().toInt();
+                                                                        if(srcPort != 0)
+                                                                        {
+                                                                            HashMap<Integer, HashMap<Integer,Integer>> tcpSrcPort_per_SrcIP = ipSrcPort_per_Srv.get(srvIP);// Null or Not NULL
+                                                                                        // IP Criterion check
+                                                                                            IPCriterion srcIpCrit = (IPCriterion) flowEntry.selector().getCriterion(Criterion.Type.IPV4_SRC);
+                                                                                            log.info("£££ Converting IP to String : {}",IPv4.toIPv4Address(srcIpCrit.toString()) );// ££ Confirm this ONCE
+
+                                                                            if(tcpSrcPort_per_SrcIP != null)
+                                                                            {
+                                                                                HashMap <Integer,Integer> temp4_mapL3 = tcpSrcPort_per_SrcIP.get(IPv4.toIPv4Address(srcIpCrit.toString()) );
+                                                                                if(temp4_mapL3 != null)
+                                                                                {
+                                                                                    temp4_mapL3.put(srcPort,(int)curr_flow_pckt);// long conversion might lead to loss of data but for unit FlowEntry should be fine
+                                                                                    tcpSrcPort_per_SrcIP.put(IPv4.toIPv4Address(srcIpCrit.toString()),temp4_mapL3);
+                                                                                    ipSrcPort_per_Srv.put(srvIP,tcpSrcPort_per_SrcIP);
+                                                                                }
+                                                                            }
+                                                                        }
+
+                                                                            /*
+                                                                            // ICMP
+                                                                                    IcmpTypeCriterion icmpTypeCrit = (IcmpTypeCriterion) entry.selector().getCriterion(Type.ICMPV4_TYPE);
+                                                                                            Short icmpType = (icmpTypeCrit == null) ? 0 : icmpTypeCrit.icmpType();
+                                                                                            IcmpCodeCriterion icmpCodeCrit = (IcmpCodeCriterion) entry.selector().getCriterion(Type.ICMPV4_CODE);
+                                                                                            Short icmpCode = (icmpCodeCrit == null) ? 0 : icmpCodeCrit.icmpCode(); 
+                                                                                            
+
+                                                                                IPCriterion dstIpCrit = (IPCriterion) entry.selector().getCriterion(Type.IPV4_DST);
+
+                                                                            // Tcp Port Criteria
+                                                                                TcpPortCriterion tcpCrit;
+                                                                                tcpCrit = (TcpPortCriterion) entry.selector().getCriterion(Type.TCP_SRC);
+                                                                                int srcPort = (tcpCrit == null) ? 0 : tcpCrit.tcpPort().toInt();
+                                                                                        tcpCrit = (TcpPortCriterion) entry.selector().getCriterion(Type.TCP_DST);
+                                                                                        int dstPort = (tcpCrit == null) ? 0 : tcpCrit.tcpPort().toInt();
+
+                                                                            // UDP
+                                                                                UdpPortCriterion udpCrit;
+                                                                                    udpCrit = (UdpPortCriterion) entry.selector().getCriterion(Type.UDP_SRC);
+                                                                                    srcPort = (udpCrit == null) ? 0 : udpCrit.udpPort().toInt();
+                                                                                    udpCrit = (UdpPortCriterion) entry.selector().getCriterion(Type.UDP_DST);
+                                                                                    dstPort = (udpCrit == null) ? 0 : udpCrit.udpPort().toInt();
+                                                                            */
+
+                                                                        log.info("Wow.. Traffic and flow selector for 1ST from current set Matched..");
+                                                                }
+                                                                // else{
+                                                                //     log.info("Ooops.. Traffic and flow selector failed to match for 1ST... will Get : bytes_Out_srv , pckt_count , flowCount = 0");
+                                                                // }
+                                                                if (deviceId.equals(flowEntry.deviceId()) && trafficSelector_bck_flow.equals(flowEntry.selector()) /*&& tcpPortCriterion != null*/)
+                                                                { 
+                                                                // Match implies current Flow entry is relevant to us for Further Calc.
+                                                                        //selecting flowEntry with maximum bytes_in     //Input port Field for portCriterion should not be null
+                                                                        // Now from this flow entry , we are going to extract required Features such as (Bytes)
+                                                                        bytes_Out_srv += flowEntry.bytes();
+                                                                        pckt_count += flowEntry.packets();
+                                                                        flowCount += 1;
+                                                                        //curr_flow_pckt = flowEntry.packets();
+                                                                        //curr_flow_life_pckt = curr_flow_pckt * flowEntry.life();
+                                                                        log.info("Wow.. Traffic and flow selector for 2ND from current set Matched..");
+                                                                }
+                                                                // else{
+                                                                //     log.info("Ooops.. Traffic and flow selector failed to match for 2ND... will Get : bytes_Out_srv , pckt_count , flowCount = 0");
+
+                                                        // }catch(Exception e){
+                                                        //         log.info("Faced exception while iterating on FlowEntry: {}",e);
+                                                        // }
+                                                }//end of for iterating over FlowEntries
+                                                // */
+                                            }else{
+                                                log.info("Received Exception in flowRuleService .. may be traffic does not exists .. skipping current Iteration");
+                                            }
+
+                                }catch (Exception e){
+                                    log.info("Faced exception while iterating on FlowEntry: {}",e);
+                                    e.printStackTrace();
+                                    exception_free_flowRuleService = 0;
+                                //     log.info("!!! caught exception in Line 532");
+                                }
+
+                                // --------------------------------- Now calculation of other Values start here
+                            if(exception_free_flowRuleService != 0)
+                            {
+                                HashMap <Integer,Integer>temp_mapL1 = new HashMap<Integer,Integer>();// declaring outside try block to be visible to other locations when reusing
+                                try
+                                {    sumOfEntries = 0.0;
+                                            //temp_mapL1 = ipSrc_per_Srv.get(srvIP);
+                                        if (ipSrc_per_Srv.get(srvIP)!= null)
+                                        {    
+                                                for( Integer i : temp_mapL1.keySet()) {
+                                                        sumOfEntries += temp_mapL1.get(i);
                                                 }
-                                                if (deviceId.equals(flowEntry.deviceId()) && trafficSelector_bck_flow.equals(flowEntry.selector()) )
-                                                { // Match implies current Flow entry is relevant to us for Further Calc.
-                                                        //selecting flowEntry with maximum bytes_in     //Input port Field for portCriterion should not be null
-                                                        // Now from this flow entry , we are going to extract required Features such as (Bytes)
-                                                        bytes_Out_srv += flowEntry.bytes();
-                                                        pckt_count += flowEntry.packets();
-                                                        flowCount += 1;
-                                                        //curr_flow_pckt = flowEntry.packets();
-                                                        //curr_flow_life_pckt = curr_flow_pckt * flowEntry.life();
+                                                for( Integer i : temp_mapL1.keySet()) {
+                                                        double value = (temp_mapL1.get(i)/ sumOfEntries);
+                                                        srcIpEntropy += -1*value*(Math.log(value)/Math.log(2));
                                                 }
+                                                //Computing shannon entropy for IP Protocols [B]-------------------------------
+                                        }
+                                        if (ipProtocols_per_Srv.get(srvIP)!= null)
+                                        {
+                                                sumOfEntries = 0;
+                                                Map <Byte,Integer>temp_mapL2 = new HashMap<Byte,Integer>(); 
+                                                temp_mapL2 = ipProtocols_per_Srv.get(srvIP);
+                                                for( Byte i : temp_mapL2.keySet()) {
+                                                        sumOfEntries += temp_mapL2.get(i);
+                                                }
+                                                for( Byte i : temp_mapL2.keySet()) {
+                                                        double value = (temp_mapL2.get(i)/ sumOfEntries);
+                                                        ipProtocolEntropy2 += -1*value*(Math.log(value)/Math.log(2));
+                                                }
+                                        }//end of part B
+                                }
+                                catch(Exception e)
+                                {
+                                            log.info("Got exception in block A or B of getFlowInfo() : {}",e);
+                                }
 
-                                                        // log.info("flow rule match found at port: "+portCriterion.port().toString());
+                                //------------------------------------------PART [C] ----------------------
+
+                                try 
+                                {
+                                    HashMap <Integer,Integer>temp_mapL3_icmp = new HashMap<Integer,Integer>();
+                                    sumOfEntries = 0.0;
+                                    if (icmp_per_Src_per_Srv.get(srvIP)!= null)
+                                    {    
+                                            temp_mapL3_icmp = icmp_per_Src_per_Srv.get(srvIP);
+                                                   for( Integer i : temp_mapL3_icmp.keySet()) 
+                                                   {
+                                                           sumOfEntries += temp_mapL3_icmp.get(i);
+                                                   }
+                                                   for( Integer i : temp_mapL3_icmp.keySet()) 
+                                                   {
+                                                           if (sumOfEntries == 0){
+                                                                   break;
+                                                           }
+                                                           double value = (temp_mapL3_icmp.get(i)/ sumOfEntries);
+                                                           srcIpIcmpEntropy += -1*value*(Math.log(value)/Math.log(2));
+                                                   }
+                                                   //Computing shannon entropy for icmp Protocols [C]
+                                           // }
+                                    }
+                                }catch(Exception e){
+                                    log.info("{}",e);
+                                }
+                                
+                                // -----------------------------------------------------------Part [C] ends 
+
+
+                                //------------------------------------------PART [D] ----------------------
+
+                                try
+                                {
+                                    temp_mapL1.clear();// reuse
+
+                                    if (ipSrcPort_per_Srv.containsKey(srvIP))
+                                    {
+                                        HashMap <Integer, HashMap <Integer, Integer>> temp_mapL22 = ipSrcPort_per_Srv.get(srvIP);
+                                        for (int i : temp_mapL22.keySet())//src ip address
+                                        {
+                                            sumOfEntries = 0.0;
+                                            temp_mapL1 = temp_mapL22.get(i);
+                                            for (int j : temp_mapL1.keySet())
+                                            {
+                                                sumOfEntries += temp_mapL1.get(j);
+                                            }
+                                            for(int j : temp_mapL1.keySet())
+                                            {
+                                                double value = temp_mapL1.get(j)/sumOfEntries;
+                                                srcPortEntropyPerIP += -1*value*(Math.log(value)/Math.log(2));
+                                            }
                                         }
-                                        /*              If not found !!! Calc on LESS PreCise Val. d () using flowEntry.packets(); used above
-                                        */
-                                        // flowEntry.packets()
-                                        // Part 2 : calc of Entopies-----------------------
-                                        
-                                        //Computing shannon entropy for IP Source [A]
-                                        sumOfEntries = 0.0;
-                                        Map <Integer,Integer>temp_mapL1 = new HashMap<Integer,Integer>(); 
-                                        temp_mapL1 = ipSrc_per_Srv.get(srvIP);
-                                        for( Integer i : temp_mapL1.keySet()) {
-                                                sumOfEntries += temp_mapL1.get(i);
-                                        }
-                                        for( Integer i : temp_mapL1.keySet()) {
-                                                double value = (temp_mapL1.get(i)/ sumOfEntries);
-                                                srcIpEntropy += -1*value*(Math.log(value)/Math.log(2));
-                                        }
-                                        
-                                        //Computing shannon entropy for IP Protocols [B]
-                                        sumOfEntries = 0;
-                                        Map <Byte,Integer>temp_mapL2 = new HashMap<Byte,Integer>(); 
-                                        temp_mapL2 = ipProtocols_per_Srv.get(srvIP);
-                                        for( Byte i : temp_mapL2.keySet()) {
-                                                sumOfEntries += temp_mapL2.get(i);
-                                        }
-                                        for( Byte i : temp_mapL2.keySet()) {
-                                                double value = (temp_mapL2.get(i)/ sumOfEntries);
-                                                ipProtocolEntropy2 += -1*value*(Math.log(value)/Math.log(2));
+                                        avgSrcPortEntropyPerIP = srcPortEntropyPerIP/temp_mapL22.size();// dividing by no. of Src IP
+                                    }
+                                }catch(Exception e){
+                                    log.info("Caught an excepion in Port Entropy block in GetFlowINfo : {}",e);
+                                }
+
+                                log.info("Average Entropy for this iteration is : {}",avgSrcPortEntropyPerIP);
+
+                                //------------------------------------------- Part [D] ends here ------------------------
+
+                                //calling writeTOCSVFile() to write flow features to file/log
+                                        try
+                                        {
+                                            FileWriter fileWriter2 = new FileWriter("/home/kamal/Desktop/CS-06_8-Sem_project_all/dataset22", true);
+                                                //converting values to string
+                                                String record = String.valueOf(pckt_count)+","
+                                                        +String.valueOf(srcIpIcmpEntropy)
+                                                        +","+String.valueOf(srcIpEntropy)+","
+                                                        +String.valueOf(ipProtocolEntropy2)
+                                                        +","+String.valueOf(bytes_In_srv)+","
+                                                        +String.valueOf(bytes_Out_srv)
+                                                        +","+String.valueOf(flowCount)+","
+                                                        +String.valueOf(0);//parameter = attack          [31-12] put numerical values
+                                                iteration++;
+                                                //writing values to log
+                                                log.info("flow_info-"+iteration+": "+record);
+                                                //writing value to file
+                                                fileWriter2.write(record+"\n");
+                                                fileWriter2.close();
+                                                log.info("flow info written to file");
+                                        } catch (IOException e) {
+                                                e.printStackTrace();
+                                                log.info("exception: {}",e);
                                         }
 
-                                        //Computing shannon entropy for Product of Flow_duration x No. of Pckts in that Flow [C]
-                                        for( Long i : flow_life_pckt ) {
-                                                double value = (i/ sum_of_all_flow_life_pckt);
-                                                flow_life_pckt_cnt_Entropy += -1*value*(Math.log(value)/Math.log(2));
-                                        }
+                                entry_To_be_Sent = IPv4.fromIPv4Address(srvIP) + "," + String.valueOf(pckt_count) + "," + String.valueOf(srcIpIcmpEntropy) +"," + String.valueOf(srcIpEntropy) + "," + String.valueOf(ipProtocolEntropy2) + "," + String.valueOf(bytes_In_srv) + ","+ String.valueOf(bytes_Out_srv) +"," + String.valueOf(flowCount);
+                                //log.info(" $%£$%^&^*(&)(*()");// just to seperate this Above Output
+                                log.info("Entry_To_be_Sent has Value of  : " + entry_To_be_Sent);
+                                //log.info(" $£$%^&)*&*(*()*)()()*");// just to seperate this Above Output
 
-                                        //----------------------------------------*****------------
-                                        //append these calculated components separately for each string
-                                        entry_To_be_Sent = entry_To_be_Sent + "," + String.valueOf(pckt_count) + "," + String.valueOf(flow_life_pckt_cnt_Entropy) +","+ String.valueOf(srcIpEntropy) + "," + String.valueOf(ipProtocolEntropy2) + "," + String.valueOf(bytes_In_srv) + ","+ String.valueOf(bytes_Out_srv) +"," + String.valueOf(flowCount);
                                         if (entries_To_be_Sent == "")
                                         {
                                                 entries_To_be_Sent = entry_To_be_Sent;
                                         }
                                         else{
+                                                // entries_To_be_Sent = "|" + entry_To_be_Sent + "|";
                                                 entries_To_be_Sent = "|" + entry_To_be_Sent;
                                         }
+                            }// end of exception_free_flowRuleService = 0 for tackling Errors
 
                                         //Clear all values for Next Server's iterations
                                         entry_To_be_Sent = "";// corros. to Single Victim IP
-                                        bytes_In_srv = Long.MIN_VALUE;
-                                        bytes_Out_srv = Long.MIN_VALUE;
+
+                                        bytes_In_srv = 0;
+                                        bytes_Out_srv = 0;
                                         pckt_count = 0;
                                         flowCount = 0;
-                                        sum_of_all_flow_life_pckt = 0;
-                                        flow_life_pckt.clear();
-                                        flow_life_pckt_cnt_Entropy = 0.0;
+                                        srcIpIcmpEntropy=0;
+                                        srcPortEntropyPerIP =0;
+                                        srcIpEntropy=0;
+                                        ipProtocolEntropy2 = 0;
+                                        // flow_life_pckt.clear();
+                                        // flow_life_pckt_cnt_Entropy = 0.0;
+                                        // sum_of_all_flow_life_pckt = 0;
 
-                                }
-                        }
+                                        if(iterationCount >= iterationSize)//Need to be careful in case exception occurs and if Code is not reaching to this staze then
+                                        // a large value might accumulate
+                                        {
+                                            ipSrc_per_Srv.clear();
+                                            ipProtocols_per_Srv.clear();
+                                            icmp_per_Src_per_Srv.clear();
+                                            tcpSrcPort_per_SrcIP.clear();
+
+                                            iterationCount =0;// reset
+                                            log.info("Cleared at OverFlow");
+                                        }
+                                        else{
+                                            iterationCount += 1;
+                                        }
+
+                        }       //END of : srvIP : ipSrc_per_Srv.keySet()
+                    }//end of if mitigationFlag ==1
                 }//end of getFlowInfo()
 
                 //writeTOCSVFIle writes flow info to csv file and log
@@ -592,7 +1009,7 @@ public class AppComponent {
                 }//end of writeToCSVFile()
 
                 @Override
-                public void run()
+                public void run() 
                 {
                         try {
                                 //Getting access to critical section
@@ -600,16 +1017,57 @@ public class AppComponent {
                         } catch (InterruptedException e) {
                                 e.printStackTrace();
                         }
-                        //calling getFlowInfo() to compute flow features value
+
+
+                        try{
+                                if (just_once==1/*true*/)
+                                {       
+
+                                        String[] stringIps = Servers.getServerIpAddresses();
+                                        for (String stringIp : stringIps)
+                                        {
+                                                //IpAddress ipAddress = IpAddress.valueOf(stringIp);
+                                                log.info("Inserted following Server's IP as key for DDos_Phase_2 : " + stringIp);
+                                                
+                                                srv_under_mitPhase.put(stringIp,0);
+                                                // ipSrc_per_Srv.put(IPv4.toIPv4Address(stringIp),null);//-- initialize for Just once
+                                                // ipProtocols_per_Srv.put(IPv4.toIPv4Address(stringIp),null);
+
+                                                // [31-12]
+                                                // try to set dependencies on just one Monitoring Variable ie String case
+                                        }
+                                        just_once = 0;
+                                }
+                        }catch(Exception e)
+                            {
+                                log.info("Error while initializing Map with Server's IP");
+                            }
+
+                        //calling getFlowInfo() to compute flow features value  -----  !!!!!!
+                        log.info("££££ Calling getFlowInfo of FlowInfoProcessor in Run");
                         getFlowInfo();
+                        
+
                         try {
                                 //calling writeTOCSVFile() to write flow features to file/log
                                 writeToCSVFile();
                         } catch (IOException e) {
                                 e.printStackTrace();
+                                log.info("eewww.. :{}",e);
                         }
-                        //converting flow features to string
-                        String data_item = String.valueOf(frames)+","
+
+
+
+                        // ------------------------ Sending to ML server-------------------------------------------------------------
+
+                        InetAddress localhost = null;
+                        Socket socket = null;
+                        Socket socket2 = null;
+                        OutputStreamWriter out = null;
+                        BufferedReader in  = null;
+                        String line1 = "";
+                                                //converting flow features to string
+                        /*String data_item = String.valueOf(frames)+","
                                 +String.valueOf(dstIpEntropy)
                                 +","+String.valueOf(srcIpEntropy)+","
                                 +String.valueOf(ipProtocolEntropy)
@@ -617,32 +1075,28 @@ public class AppComponent {
                                 +String.valueOf(bytes_out)
                                 +","+String.valueOf(flows);
 
-                        InetAddress localhost = null;
                         try {
                                 //Getting Server Address
                                 localhost = InetAddress.getByName("localhost");
                         } catch (UnknownHostException e) {
                                 e.printStackTrace();
                         }
-                        Socket socket = null;
-                        Socket socket2 = null;
                         try {
                                 //Getting socket for connection
                                 socket = new Socket(localhost, 12121);
                                 // socket2 = new Socket(localhost, 12148);// new Experiment !!!!!!!!!! can be Rmvd Later
                         } catch (IOException e) {
                                 e.printStackTrace();
+                                log.info("Caught exception at Socket establishment to ML_sr1 :{}",e);
                         }
 
                         //Getting Output and Input stream for sending and
                         // receiving data to/from server
-                        OutputStreamWriter out = null;
                         try {
                                 out = new OutputStreamWriter(socket.getOutputStream());
                         } catch (IOException e) {
                                 e.printStackTrace();
                         }
-                        BufferedReader in  = null;
                         try {
                                 in = new BufferedReader(new InputStreamReader(
                                         socket.getInputStream()));
@@ -661,7 +1115,6 @@ public class AppComponent {
                                 e.printStackTrace();
                         }
 
-                        String line1 = null;
                         try {
                                 //Getting prediction from ML Server
                                 line1 = in.readLine();
@@ -679,26 +1132,23 @@ public class AppComponent {
                         if (line1.equals("attack detected")) {
                                 attack = 1;
                         }
+                        else{
+                                attack = 0;
+                        }
 
                         //Writing attack value in log
                         log.info("attack_value: "+attack);
-
-                        // If attack detected then calling for Mitigation
+                        */
+                    try
+                    {
+                                // If attack detected then calling for Mitigation
                         // ----------------- Version 2.0--- begins
+                        /*++++++++++++++++++++++++++++=+==+++++++++++++ For test only*/ attack = 1;
                         int sendingEnabled = mitigationFlag;// 1st iteration upon Detection val will be Zero
                         if (attack == 1) 
                         {
                                 //IF Mitigation Phase_I is already in Execution, DO_NOTHING
-                                // Mitigation_flow mitigation = new Mitigation_flow(
-                                //         appId,
-                                //         deviceService,
-                                //         hostService,
-                                //         flowRuleService,
-                                //         linkService,
-                                //         flowObjectiveService,
-                                //         log);
-                                int ip_key = 0;
-                                String [] split_stringIp = new String[4];
+
                                 if (mitigationFlag == 0)
                                 {// if mitigation is not running then enable system , else if Flag value is already 1 then don't Interfere/OverRide
                                         mitigationFlag = 1;
@@ -706,23 +1156,22 @@ public class AppComponent {
                                         for (String stringIp : stringIps)
                                         {
                                                 //IpAddress ipAddress = IpAddress.valueOf(stringIp);
-                                                log.info("This is original IP string :" + stringIp);
-                                                split_stringIp = stringIp.split(".");
-                                                stringIp = "";
-                                                for(String temp_ip : split_stringIp){
-                                                    stringIp = stringIp + temp_ip; 
-                                                }
-                                                ip_key = Integer.parseInt(stringIp);
-                                                log.info("This is parsed IP from String to Integer  :" + String.valueOf(ip_key));
-                                                // error previously found was :  incompatible types: org.onlab.packet.IpAddress cannot be converted to java.lang.Integer
+                                                log.info("££££Inserted following Server's IP as key for DDos_Phase_2 : " + stringIp);
+                                                
                                                 srv_under_mitPhase.put(stringIp,0);
-                                                ipSrc_per_Srv.put(ip_key,null);// map 3 layer
+
+                                                // ipSrc_per_Srv.put(IPv4.toIPv4Address(stringIp),null);//-- initialize for Just once
+                                                // ipProtocols_per_Srv.put(IPv4.toIPv4Address(stringIp),null);
+                                                // [31-12]
+                                                // try to set dependencies on just one Monitoring Variable ie String case
                                         }
+                                        servUnderMonitorin_count = srv_under_mitPhase.size();
                                 }
                         }
-                        if (sendingEnabled == 1)// this enables skipping 1st most iteration where value of features are still zero but allows from 2nd iterations onward
+                        if (sendingEnabled == 1 /*&& exception_free_flowRuleService!=0*/)// this enables skipping 1st most iteration where value of features are still zero but allows from 2nd iterations onward
                         {
-                                log.info("Entering Block for ML_server2 after finding SendingFLAG = 1");
+                                log.info("£££Entering Block for ML_server2 after finding SendingFLAG = 1");
+                                
                                 localhost = null;
                                 try {
                                         //Getting Server Address
@@ -737,6 +1186,7 @@ public class AppComponent {
                                         socket2 = new Socket(localhost, 12148);
                                 } catch (IOException e) {
                                         e.printStackTrace();
+                                        log.info("Caught exception at Socket establishment to ML_SRV_2 :{}",e);
                                 }
                                 //Getting Output and Input stream for sending and
                                 // receiving data to/from server
@@ -745,12 +1195,15 @@ public class AppComponent {
                                         out = new OutputStreamWriter(socket2.getOutputStream());
                                 } catch (IOException e) {
                                         e.printStackTrace();
+
                                 }
                                 try {
                                         //Sending flow features to ML server
                                         out.write(entries_To_be_Sent);
                                 } catch (IOException e) {
                                         e.printStackTrace();
+                                        log.info("Caught exception at writing Outputs to ML_SRV_2 :{}",e);
+
                                 }
                                 try {
                                         out.flush();
@@ -765,8 +1218,9 @@ public class AppComponent {
                                                 socket2.getInputStream()));
                                 } catch (IOException e) {
                                         e.printStackTrace();
+                                        log.info("Caught exception at Reading Outputs to ML_SRV_2 :{}",e);
                                 }
-                                line1 = null;
+                                line1 = "";// dont keep them Null which can raises Null Pointer otherwise
                                 try {
                                         //Getting prediction from ML Server             //
                                         line1= in.readLine();
@@ -774,82 +1228,127 @@ public class AppComponent {
                                         e.printStackTrace();
                                 }
                                 try {
-                                        socket.close();
+                                        socket2.close();
                                 } catch (IOException e) {
                                         e.printStackTrace();
                                 }
                                 log.info(line1);
+                                
 
                                 //Inferrring value of attack from prediction
-                                String[] result_parameters = new String[2];//!!!!
-                                String[] results = line1.split("|");
-                                int servUnderMonitorin_count = srv_under_mitPhase.size();
-                                for (String result : results)
+                                                                        /*for Testing only //  String line1 = "10.0.0.1,attack_detected";*/
+
+
+                                String[] result_parameters = null;//!!!!
+                                // String[] result_parameters = new String[2];//!!!!
+                                String[] results = null;//%%%%%%%%%%%%%%%%%%%%%%%%%%%  Make sure to Double check from Server's side its double/Single encapsulated
+                                if (line1.indexOf("|") == -1)
                                 {
-                                        result_parameters = result.split(",");
-                                        if (result_parameters[1] == "attack_detected")
-                                        {// result = "IP"+"attack_detected/attack_not_detected"
-                                                // 1.call mitigation 2. remove IP from Monitoring
-                                                log.info("Attack Found on ServerIP : " + result_parameters[1]);
-                                                servUnderMonitorin_count -= 1; 
-                                                Mitigation_flow mitigation = new Mitigation_flow(
-                                                appId,
-                                                deviceService,
-                                                hostService,
-                                                flowRuleService,
-                                                linkService,
-                                                flowObjectiveService,
-                                                log,result_parameters[0]);
-                                                // remove IP of this server from ipSrc_per_Srv which will automatically stop monitoring process for it(Mit_Phase1)
-                                                ipSrc_per_Srv.remove(result_parameters[0]);//basically removes the key values pair 
-                                                srv_under_mitPhase.remove(result_parameters[0]);//basically removes the key values pair 
-                                        }
-                                        if (result_parameters[1] == "attack_not_detected")
-                                        {//
-                                                //srv_under_mitPhase step 1: check the value of Counter and in case if exceeding 50 iteration
-                                                if (srv_under_mitPhase.get(result_parameters[0]) == 50)
-                                                {
-                                                        // remove from monitoring
-                                                        ipSrc_per_Srv.remove(result_parameters[0]);//basically removes the key values pair 
-                                                        srv_under_mitPhase.remove(result_parameters[0]);//basically removes the key values pair
-                                                        servUnderMonitorin_count -= 1;
-                                                }
-                                        }// case of flag requ. to be  -1 for 1st iteration on servUnderMonitorin_count being = 0
-                                        //possible cases : 1.Attack on Network : False and No. of times VictimSrv identified/sent4rMit.{2.servUnderMonitorin_count >0 } [10, 01 ,00 ,11 ]
-                                        //case 1: [MLSrv1_result,MLSrv2_result] = 10
-                                        //case 1: [MLSrv1_result,MLSrv2_result] = 10
-                                        if(attack==1 && servUnderMonitorin_count==0)
-                                        {//servUnderMonitorin_count is some +ve val. greter than 1 => either no attack detected by ML2
-                                                //or Minm. safe iteration of 50 is still running for any one of server
-                                                log.info("Warning !!! : ML Server2 has failed to identify IP address on which DDos has occured, even after 50 iterations");
-                                                log.info("Warning !!! : ML Server2 has failed to identify IP address on which DDos has occured, even after 50 iterations");
-                                                log.info("Warning !!! : ML Server2 has failed to identify IP address on which DDos has occured, even after 50 iterations");
-                                                mitigationFlag = 0;
-                                        }
-                                        //case 2: [MLSrv1_result,MLSrv2_result(servUnderMonitorin_count>0)] = 01(False,True)
-                                        if (attack==0 && servUnderMonitorin_count>0)
-                                        {
-                                                // possible that attack on Network has stopped but ML_server2's 50 iterations have not completed or ML_server2 has sent
-                                                // result from previous Iteration since it is one step behind
-                                                continue;
-                                                // waiting for servUnderMonitorin_count to reduce to 0 automatically after completing 50 Iteration or upon calling mitigation on founding Attack
-                                        }
-                                        //case 3: [MLSrv1_result,MLSrv2_result(servUnderMonitorin_count>0)] = 00(False,True)
-                                        if (attack==0 && servUnderMonitorin_count==0){
-                                                // all attack have been succesfully Mitigated
-                                                log.info("Cheers ,!!! DDos attack has been Averted. !!! ");
-                                                mitigationFlag = 0;
-
-                                        }
-                                        //case 4: [MLSrv1_result,MLSrv2_result(servUnderMonitorin_count>0)] = 11(False,True)
-                                        if (attack==1 && servUnderMonitorin_count>0)
-                                        {
-                                                log.info("Result from Attack detection at each Server are on the Way...");
-                                        }
-                                        
-
+                                    results = new String[1];
+                                    results[0] = line1; // as Single server/item only // otherwise using splits by char.
+                                    // log.info("d");
+                                }else{
+                                    results = line1.split("|");
                                 }
-                        }
+                                log.info("size of result(s) : {}",results.length);
+
+                                
+
+                                if((line1 != null) || (line1 != ""))// 1st most reply from ML
+                                {
+                                        for (String result : results)
+                                        {
+                                                
+                                                result_parameters = result.split(",");// Verify compatibility
+                                                log.info("size of result: {}",result_parameters.length);
+                                                log.info("result for serverIP : {}",result_parameters[1]);
+                                                String breachValue = result_parameters[1];
+
+                                                if (breachValue.equals("attack_detected"))// result_parameters[1] == attack_detected : would be wrong when comparing Primitive and Non-Primitive
+                                                {// result = "IP"+"attack_detected/attack_not_detected"
+                                                // 1.call mitigation 2. remove IP from Monitoring
+                                                        log.info("£££££ $$$$$ Attack Found on ServerIP : " + result_parameters[0]);
+
+
+                                                        Mitigation_flow mitigation = new Mitigation_flow(
+                                                        appId,
+                                                        deviceService,
+                                                        hostService,
+                                                        flowRuleService,
+                                                        linkService,
+                                                        flowObjectiveService,
+                                                        log,result_parameters[0]);
+                                                        // remove IP of this server from ipSrc_per_Srv which will automatically stop monitoring process for it(Mit_Phase1)
+                                                        //ipSrc_per_Srv.remove(result_parameters[0]);//basically removes the key values pair 
+
+                                                        srv_under_mitPhase.remove(result_parameters[0]);//basically removes the key values pair 
+                                                        log.info("servUnderMonitorin_count Before: {}",servUnderMonitorin_count);
+                                                        servUnderMonitorin_count -= 1; 
+                                                        log.info("servUnderMonitorin_count After: {}",servUnderMonitorin_count);
+                                                }
+                                                else if(breachValue.equals("attack_detected"))
+                                                {//
+                                                        //srv_under_mitPhase step 1: check the value of Counter and in case if exceeding 50 iteration
+                                                        if (srv_under_mitPhase.get(result_parameters[0]) >= 10)
+                                                        {
+                                                                // remove from monitoring
+                                                                // ipSrc_per_Srv.remove(result_parameters[0]);//basically removes the key values pair 
+                                                                srv_under_mitPhase.remove(result_parameters[0]);//basically removes the key values pair
+                                                                servUnderMonitorin_count -= 1;
+                                                        }
+                                                        else{
+                                                            srv_under_mitPhase.put(result_parameters[0],srv_under_mitPhase.get(result_parameters[0])+1);
+                                                            log.info("$$$$ Value updated");
+                                                        }
+                                                }
+                                                else{
+                                                    boolean check = (breachValue.equals("attack_detected") /*result_parameters[1]*/) ? true : false;
+                                                    log.info("Boom smash.... something is fishy : {}",check);
+                                                }// case of flag requ. to be  -1 for 1st iteration on servUnderMonitorin_count being = 0
+                                                //possible cases : 1.Attack on Network : False and No. of times VictimSrv identified/sent4rMit.{2.servUnderMonitorin_count >0 } [10, 01 ,00 ,11 ]
+                                                //case 1: [MLSrv1_result,MLSrv2_result] = 10
+                                                //case 1: [MLSrv1_result,MLSrv2_result] = 10
+                                                if(attack==1 && servUnderMonitorin_count==0)
+                                                {//servUnderMonitorin_count is some +ve val. greter than 1 => either no attack detected by ML2
+                                                        //or Minm. safe iteration of 50 is still running for any one of server
+                                                        log.info("Warning !!! : ML Server2 has failed to identify IP address on which DDos has occured, even after 50 iterations");
+                                                        log.info("Warning !!! : ML Server2 has failed to identify IP address on which DDos has occured, even after 50 iterations");
+                                                        log.info("Warning !!! : ML Server2 has failed to identify IP address on which DDos has occured, even after 50 iterations");
+                                                        mitigationFlag = 0;
+                                                        log.info("$$$ Reseting MitigationFlag to 0");
+                                                }
+                                                //case 2: [MLSrv1_result,MLSrv2_result(servUnderMonitorin_count>0)] = 01(False,True)
+                                                if (attack==0 && servUnderMonitorin_count>0)
+                                                {
+                                                        // possible that attack on Network has stopped but ML_server2's 50 iterations have not completed or ML_server2 has sent
+                                                        // result from previous Iteration since it is one step behind
+                                                        continue;
+                                                        // waiting for servUnderMonitorin_count to reduce to 0 automatically after completing 50 Iteration or upon calling mitigation on founding Attack
+                                                }
+                                                //case 3: [MLSrv1_result,MLSrv2_result(servUnderMonitorin_count>0)] = 00(False,True)
+                                                if (attack==0 && servUnderMonitorin_count==0){
+                                                        // all attack have been succesfully Mitigated
+                                                        log.info("Cheers ,!!! DDos attack has been Averted. !!! ");
+                                                        mitigationFlag = 0;
+                                                        log.info("Reseting MitigationFlag to 0");
+
+                                                }
+                                                //case 4: [MLSrv1_result,MLSrv2_result(servUnderMonitorin_count>0)] = 11(False,True)
+                                                if (attack==1 && servUnderMonitorin_count>0)
+                                                {
+                                                        log.info("£££Result from Attack detection at each Server are on the Way...");
+                                                }
+                                                // if Mitigation flag = 0 and serverUnderMonitoring_count =0 then clear
+                                                
+
+                                        }
+                                }
+                        }// end of sending enabled
+                    }catch(Exception e){
+                        log.info("Phewww..Exception: {}",e);
+                    }
+                        
+
                         
 
                         //Resetting flow features values and maps
@@ -861,13 +1360,12 @@ public class AppComponent {
                         ipProtocolEntropy = 0.0;
                         flows = 0;
                         attack = 0;
+
                         srcIps.clear();
                         dstIps.clear();
+
                         ipProtocols.clear();
-
                         semaphore.release();
-                        log.info("Semaphore Lock Released");
-
                 }//end of run()
         }//end of FlowInfoProcessor
 

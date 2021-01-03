@@ -91,7 +91,13 @@ public class Mitigation_flow {
         //Getting serverIpAddresses
         // String[] stringIps = Servers.getServerIpAddresses();
         //converting string to IpAddress
-        IpAddress ipAddress = IpAddress.valueOf(result_IP);
+
+
+        IpAddress ipAddress = IpAddress.valueOf(result_IP);// !!!!!!!!!!!!!!  IPv4.fromIPv4address()
+
+
+
+
         //getting host from IpAddress
         Set<Host>  hostSet = hostService.getHostsByIp(ipAddress);
         for (Host host : hostSet) {
@@ -178,6 +184,8 @@ public class Mitigation_flow {
                 //PortCriterion for in_port
                 PortCriterion portCriterion = (PortCriterion) flowEntry.selector()
                         .getCriterion(Criterion.Type.IN_PORT);
+                        // May be in similar to above use :Class TcpPortCriterion ie (TcpPortCriterion) , as org.onosproject.net.flow.criteria Class PortCriterion -- (PortCriterion) is used
+                        // org.onosproject.net.flow.criteria - and similarly use/force : Class IPCriterion --- (IPCriterion)flowEntry.selector();
                 /*
                   checking if flowEntry belongs to device in considration and
                   portCriterion is not null
@@ -187,11 +195,17 @@ public class Mitigation_flow {
                     //selecting flowEntry with maximum bytes_in     //Input port Field for portCriterion should not be null
                     if (flowEntry.bytes() > max_bytes) {
                         max_bytes = flowEntry.bytes();
-                        portNumber_max_bytes = portCriterion.port();
+                        portNumber_max_bytes = portCriterion.port();//Port number of one which matched max bytes // Similarly we can use this TcpPortCriterion for getting Port number out of that
+                        // http://api.onosproject.org/1.9.1/org/onosproject/net/flow/criteria/TcpPortCriterion.html
+                        http://api.onosproject.org/1.9.1/org/onosproject/net/flow/criteria/UdpPortCriterion.html
+                        // http://api.onosproject.org/1.9.1/org/onosproject/net/flow/criteria/IPCriterion.html
+                        // May be IP prefix is what I am looking for as for corporate we have Network Address / IP
+                        // http://api.onosproject.org/1.9.1/org/onosproject/net/flow/criteria/IPProtocolCriterion.html -------- useful for matching ICMP packet undrlying if any
+                        //  more at https://blog.pages.kr/1818 ----- 1 is for ICMP , 4 for Ipv4 , 6 for TCP , 17 for UDP
                         //setting that flow rule match found
                         flag = 1;
                     }
-                    log.info("flow rule match found at port: "+portCriterion.port().toString());
+                    log.info("flow rule match found at port: "+portCriterion.port().toString());// but see here its blank => takes no input just ops the result
                 }
                 // flowEntry.packets()
                 //Returns the number of packets this flow rule has matched.
