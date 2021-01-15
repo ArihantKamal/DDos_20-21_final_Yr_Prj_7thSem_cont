@@ -4,5 +4,5 @@ org/ddosmodule/app/Mitigation_flow.class
 org/ddosmodule/app/AppComponent.class
 org/ddosmodule/app/Mitigation_flow$ThreadedTraceBack.class
 org/ddosmodule/app/AppComponent$1.class
-org/ddosmodule/app/package-info.class
 org/ddosmodule/app/AppComponent$InPacketProcessor.class
+org/ddosmodule/app/package-info.class
