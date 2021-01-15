@@ -3,6 +3,10 @@
 Algorithm that I developed behind the Product:
 https://docs.google.com/drawings/d/1a1MRlD4dvMvUJTn9D1hbsjtm-zcF2Vw1PNB3HXU3hYc/edit?usp=sharing
 
+## Git Shortcuts for remote branch
+* git pull origin main (required if having conflicting branches @remote and @Local)
+* git push -u origin main
+
 ## Steps to run project
 * Step1: Build and run ONOS
 * Step2: Activate applications(openflow and fwd) in ONOS
